@@ -63,7 +63,6 @@ import org.fossasia.openevent.common.ui.DialogFactory;
 import org.fossasia.openevent.common.ui.SmoothActionBarDrawerToggle;
 import org.fossasia.openevent.common.ui.base.BaseActivity;
 import org.fossasia.openevent.common.ui.image.ZoomableImageUtil;
-import org.fossasia.openevent.common.utils.CommonTaskLoop;
 import org.fossasia.openevent.common.utils.SharedPreferencesUtil;
 import org.fossasia.openevent.common.utils.Utils;
 import org.fossasia.openevent.config.StrategyRegistry;
@@ -86,7 +85,6 @@ import org.fossasia.openevent.data.extras.SocialLink;
 import org.fossasia.openevent.data.repository.RealmDataRepository;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.lang.ref.WeakReference;
 
 import butterknife.BindView;
@@ -128,6 +126,7 @@ public class MainActivity extends BaseActivity implements AboutFragment.OnMapSel
     private CustomTabsServiceConnection customTabsServiceConnection;
     private CustomTabsClient customTabsClient;
     private DownloadCompleteHandler completeHandler;
+    private DownloadHandler downloadHandler;
     private final CompositeDisposable disposable = new CompositeDisposable();
     private RealmDataRepository realmRepo = RealmDataRepository.getDefaultInstance();
     private Event event; // Future Event, stored to remove listeners
@@ -175,6 +174,7 @@ public class MainActivity extends BaseActivity implements AboutFragment.OnMapSel
         setupEvent();
 
         completeHandler = DownloadCompleteHandler.with(context);
+        downloadHandler = new DownloadHandler(context);
 
         if(!SharedPreferencesUtil.getBoolean(ConstantStrings.IS_DOWNLOAD_DONE, false)) {
             if(Utils.isBaseUrlEmpty()) {
@@ -346,13 +346,12 @@ public class MainActivity extends BaseActivity implements AboutFragment.OnMapSel
 
     private void syncComplete() {
         String successMessage = "Data loaded from JSON";
-        // Event successfully loaded, set data downloaded to true
         SharedPreferencesUtil.putBoolean(ConstantStrings.IS_DOWNLOAD_DONE, true);
-
-        successMessage = "Download done";
 
         if (!fromServer) {
             SharedPreferencesUtil.putBoolean(ConstantStrings.DATABASE_RECORDS_EXIST, true);
+        } else {
+            successMessage = "Download done";
         }
 
         Snackbar.make(mainFrame, getString(R.string.download_complete), Snackbar.LENGTH_SHORT).show();
@@ -744,72 +743,50 @@ public class MainActivity extends BaseActivity implements AboutFragment.OnMapSel
 
             StrategyRegistry.getInstance().getEventBusStrategy().postEventOnUIThread(new CounterEvent(7)); // Bump if increased
 
-            readJsonAsset(Urls.EVENT);
-            readJsonAsset(Urls.SESSIONS);
-            readJsonAsset(Urls.SPEAKERS);
-            readJsonAsset(Urls.TRACKS);
-            readJsonAsset(Urls.SPONSORS);
-            readJsonAsset(Urls.MICROLOCATIONS);
-            readJsonAsset(Urls.SESSION_TYPES);
-            //readJsonAsset(Urls.FAQS);
+            disposable.add(downloadHandler.downloadFromAsset()
+                    .subscribeOn(Schedulers.io())
+                    .observeOn(AndroidSchedulers.mainThread())
+                    .subscribe((name) -> {
+                        switch (name) {
+                            case ConstantStrings.EVENT: {
+                                StrategyRegistry.getInstance().getEventBusStrategy().postEventOnUIThread(new EventDownloadEvent(true));
+                                break;
+                            }
+                            case ConstantStrings.TRACKS: {
+                                StrategyRegistry.getInstance().getEventBusStrategy().postEventOnUIThread(new TracksDownloadEvent(true));
+                                break;
+                            }
+                            case ConstantStrings.SESSIONS: {
+                                StrategyRegistry.getInstance().getEventBusStrategy().postEventOnUIThread(new SessionDownloadEvent(true));
+                                break;
+                            }
+                            case ConstantStrings.SPEAKERS: {
+                                StrategyRegistry.getInstance().getEventBusStrategy().postEventOnUIThread(new SpeakerDownloadEvent(true));
+                                break;
+                            }
+                            case ConstantStrings.SPONSORS: {
+                                StrategyRegistry.getInstance().getEventBusStrategy().postEventOnUIThread(new SponsorDownloadEvent(true));
+                                break;
+                            }
+                            case ConstantStrings.MICROLOCATIONS: {
+                                StrategyRegistry.getInstance().getEventBusStrategy().postEventOnUIThread(new MicrolocationDownloadEvent(true));
+                                break;
+                            }
+                            case ConstantStrings.SESSION_TYPES: {
+                                StrategyRegistry.getInstance().getEventBusStrategy().postEventOnUIThread(new SessionTypesDownloadEvent(true));
+                                break;
+                            }
+                            default:
+                                //do nothing
+                        }
+                    }, throwable -> {
+                        throwable.printStackTrace();
+                        Timber.e(throwable);
+                        StrategyRegistry.getInstance().getEventBusStrategy().postEventOnUIThread(new RetrofitError(throwable));
+                    }));
         } else {
             completeHandler.hide();
         }
-    }
-
-    public void readJsonAsset(final String name) {
-        CommonTaskLoop.getInstance().post(new Runnable() {
-            String json = null;
-
-            @Override
-            public void run() {
-                try {
-                    InputStream inputStream = getAssets().open(name);
-                    int size = inputStream.available();
-                    byte[] buffer = new byte[size];
-                    if (inputStream.read(buffer) == -1)
-                        Timber.d("Empty Stream");
-                    inputStream.close();
-                    json = new String(buffer, "UTF-8");
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-
-                disposable.add(JsonHandler.handleJsonEvent(name, json)
-                        .subscribe(() -> {
-                            switch (name) {
-                                case ConstantStrings.EVENT: {
-                                    StrategyRegistry.getInstance().getEventBusStrategy().postEventOnUIThread(new EventDownloadEvent(true));
-                                    break;
-                                }
-                                case ConstantStrings.TRACKS: {
-                                    StrategyRegistry.getInstance().getEventBusStrategy().postEventOnUIThread(new TracksDownloadEvent(true));
-                                    break;
-                                }
-                                case ConstantStrings.SESSIONS: {
-                                    StrategyRegistry.getInstance().getEventBusStrategy().postEventOnUIThread(new SessionDownloadEvent(true));
-                                    break;
-                                }
-                                case ConstantStrings.SPEAKERS: {
-                                    StrategyRegistry.getInstance().getEventBusStrategy().postEventOnUIThread(new SpeakerDownloadEvent(true));
-                                    break;
-                                }
-                                case ConstantStrings.SPONSORS: {
-                                    StrategyRegistry.getInstance().getEventBusStrategy().postEventOnUIThread(new SponsorDownloadEvent(true));
-                                    break;
-                                }
-                                case ConstantStrings.MICROLOCATIONS: {
-                                    StrategyRegistry.getInstance().getEventBusStrategy().postEventOnUIThread(new MicrolocationDownloadEvent(true));
-                                    break;
-                                }
-                                case ConstantStrings.SESSION_TYPES: {
-                                    StrategyRegistry.getInstance().getEventBusStrategy().postEventOnUIThread(new SessionTypesDownloadEvent(true));
-                                    break;
-                                }
-                            }
-                        }, throwable -> StrategyRegistry.getInstance().getEventBusStrategy().postEventOnUIThread(new RetrofitError(throwable))));
-            }
-        });
     }
 
     @Override
